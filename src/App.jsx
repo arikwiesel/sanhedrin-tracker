@@ -3,6 +3,8 @@ import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Tool
 
 const startDate = new Date("2026-03-10");
 const targetDate = new Date("2026-11-02");
+const EDIT_QUERY_PARAM = "editKey";
+const RESET_HASH = "#danger-reset";
 
 const partLabels = [
   { key: "a-top", label: "עמוד א - חצי עליון", short: "א↑", offset: 0 },
@@ -45,47 +47,135 @@ function getLastKnownValue(history, day) {
   return relevant[relevant.length - 1].value;
 }
 
+function getEditKeyFromUrl() {
+  const params = new URLSearchParams(window.location.search);
+  return params.get(EDIT_QUERY_PARAM) || "";
+}
+
 export default function Tracker() {
   const [daf, setDaf] = useState("42");
   const [part, setPart] = useState("b-top");
   const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [history, setHistory] = useState([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isSaving, setIsSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [statusMessage, setStatusMessage] = useState("");
+  const [editKey, setEditKey] = useState("");
+  const [showDangerZone, setShowDangerZone] = useState(false);
+
+  const isEditMode = Boolean(editKey);
 
   useEffect(() => {
-    const saved = localStorage.getItem("tracker-v4");
-    if (saved) {
-      try {
-        setHistory(JSON.parse(saved));
-      } catch {
-        setHistory([]);
-      }
-    }
+    setEditKey(getEditKeyFromUrl());
+    setShowDangerZone(window.location.hash === RESET_HASH);
+
+    const onHashChange = () => setShowDangerZone(window.location.hash === RESET_HASH);
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
   }, []);
 
   useEffect(() => {
-    localStorage.setItem("tracker-v4", JSON.stringify(history));
-  }, [history]);
+    async function loadHistory() {
+      setIsLoading(true);
+      setError("");
+      try {
+        const response = await fetch("/api/progress", { method: "GET" });
+        if (!response.ok) {
+          throw new Error("טעינת הנתונים נכשלה");
+        }
+        const data = await response.json();
+        setHistory(Array.isArray(data.history) ? data.history : []);
+      } catch (err) {
+        setError(err.message || "אירעה שגיאה בטעינה");
+      } finally {
+        setIsLoading(false);
+      }
+    }
+
+    loadHistory();
+  }, []);
 
   const totalDays = daysBetween(startDate, targetDate);
   const totalParts = toIndex(113, "b-bottom");
   const todayDay = Math.max(0, daysBetween(startDate, new Date()));
 
-  const save = () => {
+  const save = async () => {
+    if (!isEditMode) {
+      setError("הלינק הזה הוא לקריאה בלבד. כדי לערוך יש להיכנס עם editKey.");
+      return;
+    }
+
     const d = new Date(date);
     const day = daysBetween(startDate, d);
     const value = toIndex(Number(daf), part);
 
-    setHistory((prev) => {
-      const filtered = prev.filter((h) => h.day !== day);
-      return [...filtered, { day, value }].sort((a, b) => a.day - b.day);
-    });
+    setIsSaving(true);
+    setError("");
+    setStatusMessage("");
+
+    try {
+      const response = await fetch("/api/progress", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-edit-key": editKey,
+        },
+        body: JSON.stringify({ day, value }),
+      });
+
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload.error || "שמירת העדכון נכשלה");
+      }
+
+      const data = await response.json();
+      setHistory(Array.isArray(data.history) ? data.history : []);
+      setStatusMessage("העדכון נשמר בענן.");
+    } catch (err) {
+      setError(err.message || "אירעה שגיאה בשמירה");
+    } finally {
+      setIsSaving(false);
+    }
   };
 
-  const reset = () => {
-    setHistory([]);
-    setDaf("42");
-    setPart("b-top");
-    setDate(new Date().toISOString().slice(0, 10));
+  const reset = async () => {
+    if (!isEditMode) return;
+
+    const confirmation = window.prompt('לאיפוס מלא הקלד בדיוק: מחק הכל');
+    if (confirmation !== 'מחק הכל') {
+      setStatusMessage("האיפוס בוטל.");
+      return;
+    }
+
+    setIsSaving(true);
+    setError("");
+    setStatusMessage("");
+
+    try {
+      const response = await fetch("/api/progress", {
+        method: "DELETE",
+        headers: {
+          "x-edit-key": editKey,
+        },
+      });
+
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload.error || "האיפוס נכשל");
+      }
+
+      const data = await response.json();
+      setHistory(Array.isArray(data.history) ? data.history : []);
+      setDaf("42");
+      setPart("b-top");
+      setDate(new Date().toISOString().slice(0, 10));
+      setStatusMessage("כל הנתונים נמחקו מהענן.");
+    } catch (err) {
+      setError(err.message || "אירעה שגיאה באיפוס");
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const latestProgress = history.length ? history[history.length - 1] : null;
@@ -158,16 +248,25 @@ export default function Tracker() {
         <div style={{ background: "white", borderRadius: 16, padding: 20, boxShadow: "0 1px 4px rgba(0,0,0,0.08)" }}>
           <h1 style={{ marginTop: 0 }}>מעקב סיום מסכת סנהדרין</h1>
           <p style={{ color: "#475569" }}>תחילת התכנית: 10/03/2026, מנקודת התחלה דף מ״ב עמוד ב חצי עליון. יעד סיום: 02/11/2026.</p>
+          <div style={{ marginBottom: 14, padding: 12, borderRadius: 12, background: isEditMode ? "#ecfdf5" : "#eff6ff", color: isEditMode ? "#166534" : "#1d4ed8" }}>
+            {isEditMode
+              ? "מצב עריכה פעיל. הלינק הרגיל מתאים לשיתוף לקריאה בלבד."
+              : "מצב קריאה בלבד. כדי לערוך, היכנס עם לינק העריכה הפרטי שלך."}
+          </div>
+
+          {error && <div style={{ marginBottom: 12, padding: 12, borderRadius: 12, background: "#fef2f2", color: "#b91c1c" }}>{error}</div>}
+          {statusMessage && <div style={{ marginBottom: 12, padding: 12, borderRadius: 12, background: "#f0fdf4", color: "#166534" }}>{statusMessage}</div>}
+          {isLoading && <div style={{ marginBottom: 12, color: "#475569" }}>טוען נתונים מהענן...</div>}
 
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12, alignItems: "end" }}>
             <label style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
               <div style={{ marginBottom: 6 }}>תאריך העדכון</div>
-              <input type="date" value={date} onChange={(e) => setDate(e.target.value)} style={{ width: "100%", boxSizing: "border-box", padding: 10, borderRadius: 10, border: "1px solid #cbd5e1", direction: "ltr" }} />
+              <input type="date" value={date} onChange={(e) => setDate(e.target.value)} disabled={!isEditMode || isSaving} style={{ width: "100%", boxSizing: "border-box", padding: 10, borderRadius: 10, border: "1px solid #cbd5e1", direction: "ltr", background: isEditMode ? "white" : "#f8fafc" }} />
             </label>
 
             <label style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
               <div style={{ marginBottom: 6 }}>דף</div>
-              <select value={daf} onChange={(e) => setDaf(e.target.value)} style={{ width: "100%", boxSizing: "border-box", padding: 10, borderRadius: 10, border: "1px solid #cbd5e1" }}>
+              <select value={daf} onChange={(e) => setDaf(e.target.value)} disabled={!isEditMode || isSaving} style={{ width: "100%", boxSizing: "border-box", padding: 10, borderRadius: 10, border: "1px solid #cbd5e1", background: isEditMode ? "white" : "#f8fafc" }}>
                 {Array.from({ length: 72 }, (_, i) => 42 + i).map((d) => (
                   <option key={d} value={String(d)}>דף {formatHebrewDaf(d)}</option>
                 ))}
@@ -176,16 +275,29 @@ export default function Tracker() {
 
             <label style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
               <div style={{ marginBottom: 6 }}>חלק בדף</div>
-              <select value={part} onChange={(e) => setPart(e.target.value)} style={{ width: "100%", boxSizing: "border-box", padding: 10, borderRadius: 10, border: "1px solid #cbd5e1" }}>
+              <select value={part} onChange={(e) => setPart(e.target.value)} disabled={!isEditMode || isSaving} style={{ width: "100%", boxSizing: "border-box", padding: 10, borderRadius: 10, border: "1px solid #cbd5e1", background: isEditMode ? "white" : "#f8fafc" }}>
                 {partLabels.map((p) => (
                   <option key={p.key} value={p.key}>{p.label}</option>
                 ))}
               </select>
             </label>
 
-            <button onClick={save} style={{ width: "100%", boxSizing: "border-box", padding: 12, borderRadius: 10, border: 0, background: "#2563eb", color: "white", cursor: "pointer", minHeight: 42 }}>שמור עדכון</button>
-            <button onClick={reset} style={{ width: "100%", boxSizing: "border-box", padding: 12, borderRadius: 10, border: "1px solid #cbd5e1", background: "white", cursor: "pointer", minHeight: 42 }}>איפוס</button>
+            {isEditMode && (
+              <button onClick={save} disabled={isSaving} style={{ width: "100%", boxSizing: "border-box", padding: 12, borderRadius: 10, border: 0, background: "#2563eb", color: "white", cursor: "pointer", minHeight: 42, opacity: isSaving ? 0.7 : 1 }}>
+                {isSaving ? "שומר..." : "שמור עדכון"}
+              </button>
+            )}
           </div>
+
+          {isEditMode && showDangerZone && (
+            <div style={{ marginTop: 18, padding: 16, borderRadius: 12, border: "1px dashed #ef4444", background: "#fff7ed" }}>
+              <div style={{ marginBottom: 10, fontWeight: 700, color: "#9a3412" }}>אזור איפוס מוסתר</div>
+              <div style={{ marginBottom: 10, color: "#9a3412" }}>האיפוס לא מופיע בלינק הרגיל. כדי להגיע אליו צריך גם לינק עריכה וגם להוסיף לכתובת את {RESET_HASH}.</div>
+              <button onClick={reset} disabled={isSaving} style={{ padding: 12, borderRadius: 10, border: 0, background: "#dc2626", color: "white", cursor: "pointer", minHeight: 42, opacity: isSaving ? 0.7 : 1 }}>
+                {isSaving ? "מאפס..." : "איפוס מלא"}
+              </button>
+            </div>
+          )}
         </div>
 
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 16 }}>
@@ -206,7 +318,7 @@ export default function Tracker() {
           <div style={{ background: "white", borderRadius: 16, padding: 20, boxShadow: "0 1px 4px rgba(0,0,0,0.08)" }}>
             <div style={{ color: "#64748b", marginBottom: 8 }}>העדכון האחרון</div>
             <div style={{ fontSize: 22, fontWeight: 700 }}>
-              {latestProgress ? `יום ${latestProgress.day} · ${latestProgress.value} רבעים` : "עדיין אין נתונים"}
+              {latestProgress ? `${formatDayLabel(latestProgress.day)} · ${latestProgress.value} רבעים` : "עדיין אין נתונים"}
             </div>
           </div>
 
@@ -243,7 +355,7 @@ export default function Tracker() {
 
         <div style={{ background: "white", borderRadius: 16, padding: 20, boxShadow: "0 1px 4px rgba(0,0,0,0.08)" }}>
           <h2 style={{ marginTop: 0 }}>ימי לימוד</h2>
-          <p style={{ color: "#475569" }}>כל ריבוע ירוק הוא יום שבו שמרת עדכון. אפור אומר שלא נשמר עדכון באותו יום.</p>
+          <p style={{ color: "#475569" }}>כל ריבוע ירוק הוא יום שבו נשמר עדכון. אפור אומר שלא נשמר עדכון באותו יום.</p>
           <div style={{ display: "grid", gap: 8 }}>
             {heatmapWeeks.map((row, rowIndex) => (
               <div key={rowIndex} style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
