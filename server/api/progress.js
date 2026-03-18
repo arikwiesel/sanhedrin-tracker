@@ -24,6 +24,9 @@ async function getHistory() {
 
 function canEdit(event) {
   const provided = getHeader(event, "x-edit-key");
+  console.log("provided:", JSON.stringify(provided));
+  console.log("expected:", JSON.stringify(process.env.EDIT_KEY));
+  console.log("match:", provided === process.env.EDIT_KEY);
   return Boolean(process.env.EDIT_KEY) && provided === process.env.EDIT_KEY;
 }
 
