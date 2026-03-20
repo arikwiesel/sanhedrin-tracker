@@ -1,33 +1,12 @@
-import { createError, defineEventHandler, readBody } from "h3";
 import { Redis } from "@upstash/redis";
 
 const HISTORY_KEY = "sanhedrin:history";
 const isDevelopment = process.env.NODE_ENV !== "production";
 const redisUrl = process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL || "";
 const redisToken = process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN || "";
-const hasRedisEnv = Boolean(redisUrl) && Boolean(redisToken);
-const redis = hasRedisEnv ? new Redis({ url: redisUrl, token: redisToken }) : null;
+const redis = redisUrl && redisToken ? new Redis({ url: redisUrl, token: redisToken }) : null;
 const devEditKey = "dev-edit-key";
 let memoryHistory = [];
-
-function readHeaderValue(event, name) {
-  const normalized = name.toLowerCase();
-
-  if (typeof event?.headers?.get === "function") {
-    return event.headers.get(name) || event.headers.get(normalized) || "";
-  }
-
-  const headers = event?.node?.req?.headers || event?.req?.headers || event?.headers;
-  if (!headers) {
-    return "";
-  }
-
-  if (typeof headers.get === "function") {
-    return headers.get(name) || headers.get(normalized) || "";
-  }
-
-  return headers[name] || headers[normalized] || "";
-}
 
 function sortHistory(history) {
   return [...history].sort((a, b) => a.day - b.day);
@@ -61,79 +40,76 @@ async function setHistory(history) {
   await redis.set(HISTORY_KEY, history);
 }
 
-function canEdit(event) {
-  const provided = readHeaderValue(event, "x-edit-key");
-  const expected = process.env.EDIT_KEY || (isDevelopment ? devEditKey : "");
-  return Boolean(expected) && provided === expected;
+function getHeader(req, name) {
+  const value = req.headers?.[name] || req.headers?.[name.toLowerCase()];
+  return Array.isArray(value) ? value[0] : value || "";
 }
 
-async function readJsonBody(event) {
-  if (typeof event?.request?.json === "function") {
-    return await event.request.json();
-  }
-
-  if (typeof event?.body === "string") {
-    return JSON.parse(event.body);
-  }
-
-  return await readBody(event);
+function getExpectedEditKey() {
+  return process.env.EDIT_KEY || (isDevelopment ? devEditKey : "");
 }
 
-function getAuthDebug(event) {
-  const provided = readHeaderValue(event, "x-edit-key") || "";
-  const expected = process.env.EDIT_KEY || (isDevelopment ? devEditKey : "");
-
-  return {
-    hasEditKeyEnv: Boolean(process.env.EDIT_KEY),
-    nodeEnv: process.env.NODE_ENV || "",
-    vercelEnv: process.env.VERCEL_ENV || "",
-    providedLength: provided.length,
-    expectedLength: expected.length,
-    exactMatch: Boolean(expected) && provided === expected,
-    trimmedMatch: Boolean(expected) && provided.trim() === expected.trim(),
-  };
+function canEdit(req) {
+  return Boolean(getExpectedEditKey()) && getHeader(req, "x-edit-key") === getExpectedEditKey();
 }
 
-export default defineEventHandler(async (event) => {
-  if (event.method === "GET") {
-    const history = await getHistory();
-    return { history };
+function parseJsonBody(req) {
+  if (req.body && typeof req.body === "object") {
+    return req.body;
   }
 
-  if (event.method === "POST") {
-    if (!canEdit(event)) {
-      if (readHeaderValue(event, "x-debug-auth") === "1") {
-        return { error: "Unauthorized", debug: getAuthDebug(event) };
+  if (typeof req.body === "string" && req.body.length > 0) {
+    return JSON.parse(req.body);
+  }
+
+  return {};
+}
+
+function sendJson(res, statusCode, payload) {
+  res.statusCode = statusCode;
+  res.setHeader("Content-Type", "application/json; charset=utf-8");
+  res.end(JSON.stringify(payload));
+}
+
+export default async function handler(req, res) {
+  try {
+    if (req.method === "GET") {
+      const history = await getHistory();
+      return sendJson(res, 200, { history });
+    }
+
+    if (req.method === "POST") {
+      if (!canEdit(req)) {
+        return sendJson(res, 401, { error: "Unauthorized" });
       }
-      throw createError({ statusCode: 401, statusMessage: "Unauthorized" });
-    }
 
-    const body = await readJsonBody(event);
-    const entry = { day: Number(body?.day), value: Number(body?.value) };
+      const body = parseJsonBody(req);
+      const entry = { day: Number(body?.day), value: Number(body?.value) };
 
-    if (!isValidEntry(entry)) {
-      throw createError({ statusCode: 400, statusMessage: "Invalid payload" });
-    }
-
-    const history = await getHistory();
-    const filtered = history.filter((item) => item.day !== entry.day);
-    const nextHistory = sortHistory([...filtered, entry]);
-
-    await setHistory(nextHistory);
-    return { history: nextHistory };
-  }
-
-  if (event.method === "DELETE") {
-    if (!canEdit(event)) {
-      if (readHeaderValue(event, "x-debug-auth") === "1") {
-        return { error: "Unauthorized", debug: getAuthDebug(event) };
+      if (!isValidEntry(entry)) {
+        return sendJson(res, 400, { error: "Invalid payload" });
       }
-      throw createError({ statusCode: 401, statusMessage: "Unauthorized" });
+
+      const history = await getHistory();
+      const filtered = history.filter((item) => item.day !== entry.day);
+      const nextHistory = sortHistory([...filtered, entry]);
+
+      await setHistory(nextHistory);
+      return sendJson(res, 200, { history: nextHistory });
     }
 
-    await setHistory([]);
-    return { history: [] };
-  }
+    if (req.method === "DELETE") {
+      if (!canEdit(req)) {
+        return sendJson(res, 401, { error: "Unauthorized" });
+      }
 
-  throw createError({ statusCode: 405, statusMessage: "Method not allowed" });
-});
+      await setHistory([]);
+      return sendJson(res, 200, { history: [] });
+    }
+
+    return sendJson(res, 405, { error: "Method not allowed" });
+  } catch (error) {
+    console.error(error);
+    return sendJson(res, 500, { error: "Internal server error" });
+  }
+}
