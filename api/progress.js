@@ -67,6 +67,18 @@ function canEdit(event) {
   return Boolean(expected) && provided === expected;
 }
 
+async function readJsonBody(event) {
+  if (typeof event?.request?.json === "function") {
+    return await event.request.json();
+  }
+
+  if (typeof event?.body === "string") {
+    return JSON.parse(event.body);
+  }
+
+  return await readBody(event);
+}
+
 function getAuthDebug(event) {
   const provided = readHeaderValue(event, "x-edit-key") || "";
   const expected = process.env.EDIT_KEY || (isDevelopment ? devEditKey : "");
@@ -96,7 +108,7 @@ export default defineEventHandler(async (event) => {
       throw createError({ statusCode: 401, statusMessage: "Unauthorized" });
     }
 
-    const body = await readBody(event);
+    const body = await readJsonBody(event);
     const entry = { day: Number(body?.day), value: Number(body?.value) };
 
     if (!isValidEntry(entry)) {
