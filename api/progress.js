@@ -1,7 +1,15 @@
+import { createError, defineEventHandler, getHeader, readBody } from "h3";
 import { Redis } from "@upstash/redis";
 
-const redis = Redis.fromEnv();
 const HISTORY_KEY = "sanhedrin:history";
+const isDevelopment = process.env.NODE_ENV !== "production";
+const hasRedisEnv = Boolean(process.env.UPSTASH_REDIS_REST_URL) && Boolean(process.env.UPSTASH_REDIS_REST_TOKEN);
+const redis = hasRedisEnv ? Redis.fromEnv() : null;
+const devEditKey = "dev-edit-key";
+
+if (!globalThis.__sanhedrinTrackerHistory) {
+  globalThis.__sanhedrinTrackerHistory = [];
+}
 
 function sortHistory(history) {
   return [...history].sort((a, b) => a.day - b.day);
@@ -18,16 +26,27 @@ function isValidEntry(entry) {
 }
 
 async function getHistory() {
+  if (!redis) {
+    return sortHistory(globalThis.__sanhedrinTrackerHistory);
+  }
+
   const history = await redis.get(HISTORY_KEY);
   return Array.isArray(history) ? sortHistory(history) : [];
 }
 
+async function setHistory(history) {
+  if (!redis) {
+    globalThis.__sanhedrinTrackerHistory = sortHistory(history);
+    return;
+  }
+
+  await redis.set(HISTORY_KEY, history);
+}
+
 function canEdit(event) {
   const provided = getHeader(event, "x-edit-key");
-  console.log("provided:", JSON.stringify(provided));
-  console.log("expected:", JSON.stringify(process.env.EDIT_KEY));
-  console.log("match:", provided === process.env.EDIT_KEY);
-  return Boolean(process.env.EDIT_KEY) && provided === process.env.EDIT_KEY;
+  const expected = process.env.EDIT_KEY || (isDevelopment ? devEditKey : "");
+  return Boolean(expected) && provided === expected;
 }
 
 export default defineEventHandler(async (event) => {
@@ -52,7 +71,7 @@ export default defineEventHandler(async (event) => {
     const filtered = history.filter((item) => item.day !== entry.day);
     const nextHistory = sortHistory([...filtered, entry]);
 
-    await redis.set(HISTORY_KEY, nextHistory);
+    await setHistory(nextHistory);
     return { history: nextHistory };
   }
 
@@ -61,10 +80,9 @@ export default defineEventHandler(async (event) => {
       throw createError({ statusCode: 401, statusMessage: "Unauthorized" });
     }
 
-    await redis.set(HISTORY_KEY, []);
+    await setHistory([]);
     return { history: [] };
   }
 
   throw createError({ statusCode: 405, statusMessage: "Method not allowed" });
 });
-
