@@ -49,6 +49,21 @@ function canEdit(event) {
   return Boolean(expected) && provided === expected;
 }
 
+function getAuthDebug(event) {
+  const provided = getHeader(event, "x-edit-key") || "";
+  const expected = process.env.EDIT_KEY || (isDevelopment ? devEditKey : "");
+
+  return {
+    hasEditKeyEnv: Boolean(process.env.EDIT_KEY),
+    nodeEnv: process.env.NODE_ENV || "",
+    vercelEnv: process.env.VERCEL_ENV || "",
+    providedLength: provided.length,
+    expectedLength: expected.length,
+    exactMatch: Boolean(expected) && provided === expected,
+    trimmedMatch: Boolean(expected) && provided.trim() === expected.trim(),
+  };
+}
+
 export default defineEventHandler(async (event) => {
   if (event.method === "GET") {
     const history = await getHistory();
@@ -57,6 +72,9 @@ export default defineEventHandler(async (event) => {
 
   if (event.method === "POST") {
     if (!canEdit(event)) {
+      if (getHeader(event, "x-debug-auth") === "1") {
+        return { error: "Unauthorized", debug: getAuthDebug(event) };
+      }
       throw createError({ statusCode: 401, statusMessage: "Unauthorized" });
     }
 
@@ -77,6 +95,9 @@ export default defineEventHandler(async (event) => {
 
   if (event.method === "DELETE") {
     if (!canEdit(event)) {
+      if (getHeader(event, "x-debug-auth") === "1") {
+        return { error: "Unauthorized", debug: getAuthDebug(event) };
+      }
       throw createError({ statusCode: 401, statusMessage: "Unauthorized" });
     }
 
