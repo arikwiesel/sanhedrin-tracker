@@ -1,14 +1,32 @@
-import { createError, defineEventHandler, getHeader, readBody } from "h3";
+import { createError, defineEventHandler, readBody } from "h3";
 import { Redis } from "@upstash/redis";
 
 const HISTORY_KEY = "sanhedrin:history";
 const isDevelopment = process.env.NODE_ENV !== "production";
-const hasRedisEnv = Boolean(process.env.UPSTASH_REDIS_REST_URL) && Boolean(process.env.UPSTASH_REDIS_REST_TOKEN);
-const redis = hasRedisEnv ? Redis.fromEnv() : null;
+const redisUrl = process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL || "";
+const redisToken = process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN || "";
+const hasRedisEnv = Boolean(redisUrl) && Boolean(redisToken);
+const redis = hasRedisEnv ? new Redis({ url: redisUrl, token: redisToken }) : null;
 const devEditKey = "dev-edit-key";
+let memoryHistory = [];
 
-if (!globalThis.__sanhedrinTrackerHistory) {
-  globalThis.__sanhedrinTrackerHistory = [];
+function readHeaderValue(event, name) {
+  const normalized = name.toLowerCase();
+
+  if (typeof event?.headers?.get === "function") {
+    return event.headers.get(name) || event.headers.get(normalized) || "";
+  }
+
+  const headers = event?.node?.req?.headers || event?.req?.headers || event?.headers;
+  if (!headers) {
+    return "";
+  }
+
+  if (typeof headers.get === "function") {
+    return headers.get(name) || headers.get(normalized) || "";
+  }
+
+  return headers[name] || headers[normalized] || "";
 }
 
 function sortHistory(history) {
@@ -27,7 +45,7 @@ function isValidEntry(entry) {
 
 async function getHistory() {
   if (!redis) {
-    return sortHistory(globalThis.__sanhedrinTrackerHistory);
+    return sortHistory(memoryHistory);
   }
 
   const history = await redis.get(HISTORY_KEY);
@@ -36,7 +54,7 @@ async function getHistory() {
 
 async function setHistory(history) {
   if (!redis) {
-    globalThis.__sanhedrinTrackerHistory = sortHistory(history);
+    memoryHistory = sortHistory(history);
     return;
   }
 
@@ -44,13 +62,13 @@ async function setHistory(history) {
 }
 
 function canEdit(event) {
-  const provided = getHeader(event, "x-edit-key");
+  const provided = readHeaderValue(event, "x-edit-key");
   const expected = process.env.EDIT_KEY || (isDevelopment ? devEditKey : "");
   return Boolean(expected) && provided === expected;
 }
 
 function getAuthDebug(event) {
-  const provided = getHeader(event, "x-edit-key") || "";
+  const provided = readHeaderValue(event, "x-edit-key") || "";
   const expected = process.env.EDIT_KEY || (isDevelopment ? devEditKey : "");
 
   return {
@@ -72,7 +90,7 @@ export default defineEventHandler(async (event) => {
 
   if (event.method === "POST") {
     if (!canEdit(event)) {
-      if (getHeader(event, "x-debug-auth") === "1") {
+      if (readHeaderValue(event, "x-debug-auth") === "1") {
         return { error: "Unauthorized", debug: getAuthDebug(event) };
       }
       throw createError({ statusCode: 401, statusMessage: "Unauthorized" });
@@ -95,7 +113,7 @@ export default defineEventHandler(async (event) => {
 
   if (event.method === "DELETE") {
     if (!canEdit(event)) {
-      if (getHeader(event, "x-debug-auth") === "1") {
+      if (readHeaderValue(event, "x-debug-auth") === "1") {
         return { error: "Unauthorized", debug: getAuthDebug(event) };
       }
       throw createError({ statusCode: 401, statusMessage: "Unauthorized" });
