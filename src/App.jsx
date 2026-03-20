@@ -5,6 +5,8 @@ const startDate = new Date("2026-03-10");
 const targetDate = new Date("2026-11-02");
 const EDIT_QUERY_PARAM = "editKey";
 const RESET_HASH = "#danger-reset";
+const LAST_COMMIT_AT = typeof __APP_LAST_COMMIT_AT__ === "string" ? __APP_LAST_COMMIT_AT__ : "";
+const LAST_COMMIT_HASH = typeof __APP_LAST_COMMIT_HASH__ === "string" ? __APP_LAST_COMMIT_HASH__ : "";
 
 const partLabels = [
   { key: "a-top", label: "עמוד א - חצי עליון", short: "א↑", offset: 0 },
@@ -52,6 +54,16 @@ function getEditKeyFromUrl() {
   return params.get(EDIT_QUERY_PARAM) || "";
 }
 
+function formatLastCodeChange() {
+  if (!LAST_COMMIT_AT) return "";
+
+  const date = new Date(LAST_COMMIT_AT);
+  if (Number.isNaN(date.getTime())) return "";
+
+  const formatted = date.toLocaleString("he-IL");
+  return LAST_COMMIT_HASH ? `${formatted} · ${LAST_COMMIT_HASH}` : formatted;
+}
+
 export default function Tracker() {
   const [daf, setDaf] = useState("42");
   const [part, setPart] = useState("b-top");
@@ -65,6 +77,7 @@ export default function Tracker() {
   const [showDangerZone, setShowDangerZone] = useState(false);
 
   const isEditMode = Boolean(editKey);
+  const lastCodeChange = formatLastCodeChange();
 
   useEffect(() => {
     setEditKey(getEditKeyFromUrl());
@@ -248,6 +261,11 @@ export default function Tracker() {
         <div style={{ background: "white", borderRadius: 16, padding: 20, boxShadow: "0 1px 4px rgba(0,0,0,0.08)" }}>
           <h1 style={{ marginTop: 0 }}>מעקב סיום מסכת סנהדרין</h1>
           <p style={{ color: "#475569" }}>תחילת התכנית: 10/03/2026, מנקודת התחלה דף מ״ב עמוד ב חצי עליון. יעד סיום: 02/11/2026.</p>
+          {lastCodeChange && (
+            <p style={{ color: "#64748b", fontSize: 14 }}>
+              עדכון קוד אחרון: {lastCodeChange}
+            </p>
+          )}
           <div style={{ marginBottom: 14, padding: 12, borderRadius: 12, background: isEditMode ? "#ecfdf5" : "#eff6ff", color: isEditMode ? "#166534" : "#1d4ed8" }}>
             {isEditMode
               ? "מצב עריכה פעיל. הלינק הרגיל מתאים לשיתוף לקריאה בלבד."
@@ -392,4 +410,3 @@ export default function Tracker() {
     </div>
   );
 }
-
