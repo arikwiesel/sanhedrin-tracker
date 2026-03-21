@@ -139,7 +139,9 @@ async function handleRequest(req, res) {
 export default defineEventHandler(async (event) => {
   let parsedBody;
   if (["POST", "PUT", "PATCH", "DELETE"].includes(event.method)) {
-    if (typeof event.request?.json === "function") {
+    if (event.req?.body !== undefined) {
+      parsedBody = event.req.body;
+    } else if (typeof event.request?.json === "function") {
       parsedBody = await event.request.json();
     } else {
       parsedBody = await readBody(event);
