@@ -1,8 +1,7 @@
 import { Redis } from "@upstash/redis";
-import { defineEventHandler, readBody } from "h3";
 
 const HISTORY_KEY = "sanhedrin:history";
-const isDevelopment = process.env.VERCEL !== "1";
+const isDevelopment = process.env.NODE_ENV !== "production";
 const redisUrl = process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL || "";
 const redisToken = process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN || "";
 const redis = redisUrl && redisToken ? new Redis({ url: redisUrl, token: redisToken }) : null;
@@ -46,18 +45,6 @@ function getHeader(req, name) {
   return Array.isArray(value) ? value[0] : value || "";
 }
 
-function normalizeHeaders(headers) {
-  if (!headers) {
-    return {};
-  }
-
-  if (typeof headers[Symbol.iterator] === "function") {
-    return Object.fromEntries(headers);
-  }
-
-  return headers;
-}
-
 function getExpectedEditKey() {
   return process.env.EDIT_KEY || (isDevelopment ? devEditKey : "");
 }
@@ -79,21 +66,12 @@ function parseJsonBody(req) {
 }
 
 function sendJson(res, statusCode, payload) {
-  if (!res) {
-    return new Response(JSON.stringify(payload), {
-      status: statusCode,
-      headers: {
-        "Content-Type": "application/json; charset=utf-8",
-      },
-    });
-  }
-
   res.statusCode = statusCode;
   res.setHeader("Content-Type", "application/json; charset=utf-8");
   res.end(JSON.stringify(payload));
 }
 
-async function handleRequest(req, res) {
+export default async function handler(req, res) {
   try {
     if (req.method === "GET") {
       const history = await getHistory();
@@ -135,29 +113,3 @@ async function handleRequest(req, res) {
     return sendJson(res, 500, { error: "Internal server error" });
   }
 }
-
-export default defineEventHandler(async (event) => {
-  let parsedBody;
-  if (["POST", "PUT", "PATCH", "DELETE"].includes(event.method)) {
-    if (event.req?.body !== undefined) {
-      parsedBody = event.req.body;
-    } else if (typeof event.request?.json === "function") {
-      parsedBody = await event.request.json();
-    } else {
-      parsedBody = await readBody(event);
-    }
-  }
-  const req = event.node?.req
-    ? { method: event.node.req.method, headers: event.node.req.headers, body: parsedBody }
-    : event.req
-      ? { method: event.req.method, headers: event.req.headers, body: parsedBody }
-      : {
-          method: event.method,
-          headers: normalizeHeaders(event.headers),
-          body: parsedBody,
-        };
-  const res = event.node?.res || event.res;
-  const result = await handleRequest(req, res);
-
-  return result;
-});
