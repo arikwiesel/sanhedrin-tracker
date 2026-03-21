@@ -3,6 +3,8 @@ import react, { reactCompilerPreset } from '@vitejs/plugin-react'
 import babel from '@rolldown/plugin-babel'
 import { execSync } from 'node:child_process'
 
+const apiProxyTarget = process.env.VITE_API_PROXY_TARGET || 'http://127.0.0.1:3001'
+
 function getGitBuildInfo(command, fallback) {
   try {
     return execSync(command, { encoding: 'utf8' }).trim()
@@ -27,7 +29,7 @@ export default defineConfig({
   server: {
     proxy: {
       "/api": {
-        target: "http://127.0.0.1:3001",
+        target: apiProxyTarget,
         changeOrigin: true,
       },
     },

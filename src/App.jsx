@@ -49,6 +49,31 @@ function getLastKnownValue(history, day) {
   return relevant[relevant.length - 1].value;
 }
 
+function toPages(parts) {
+  return parts / 4;
+}
+
+function formatPages(parts, fractionDigits = 1) {
+  return `${toPages(parts).toFixed(fractionDigits)} דפים`;
+}
+
+function getDateForDay(day) {
+  const d = new Date(startDate);
+  d.setDate(d.getDate() + day);
+  return d;
+}
+
+function formatFullDate(day) {
+  return getDateForDay(day).toLocaleDateString("he-IL");
+}
+
+function getProgressLabel(value) {
+  const safeValue = Math.max(0, Math.round(value));
+  const dafNumber = 42 + Math.floor(safeValue / 4);
+  const partIndex = Math.min(3, Math.max(0, safeValue % 4));
+  return `דף ${formatHebrewDaf(dafNumber)} ${partLabels[partIndex].short}`;
+}
+
 function getEditKeyFromUrl() {
   const params = new URLSearchParams(window.location.search);
   return params.get(EDIT_QUERY_PARAM) || "";
@@ -75,9 +100,13 @@ export default function Tracker() {
   const [statusMessage, setStatusMessage] = useState("");
   const [editKey, setEditKey] = useState("");
   const [showDangerZone, setShowDangerZone] = useState(false);
+  const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
+  const [hoveredStudyDay, setHoveredStudyDay] = useState(null);
 
   const isEditMode = Boolean(editKey);
   const lastCodeChange = formatLastCodeChange();
+  const isNarrowScreen = viewportWidth < 900;
+  const isVeryNarrowScreen = viewportWidth < 640;
 
   useEffect(() => {
     setEditKey(getEditKeyFromUrl());
@@ -86,6 +115,12 @@ export default function Tracker() {
     const onHashChange = () => setShowDangerZone(window.location.hash === RESET_HASH);
     window.addEventListener("hashchange", onHashChange);
     return () => window.removeEventListener("hashchange", onHashChange);
+  }, []);
+
+  useEffect(() => {
+    const onResize = () => setViewportWidth(window.innerWidth);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
   }, []);
 
   useEffect(() => {
@@ -210,6 +245,8 @@ export default function Tracker() {
     finish.setDate(startDate.getDate() + last.day + daysNeeded);
     return {
       perWeek: perDay * 7,
+      perDay,
+      finishDay: last.day + daysNeeded,
       finishDate: finish,
     };
   }, [history, totalParts]);
@@ -218,22 +255,38 @@ export default function Tracker() {
     return Array.from({ length: totalDays + 1 }, (_, day) => ({
       day,
       xLabel: formatDayLabel(day),
-      planned: Number(((day / totalDays) * totalParts).toFixed(1)),
-      actual: getLastKnownValue(history, day),
+      planned: Number(toPages((day / totalDays) * totalParts).toFixed(2)),
+      actual: latestProgress && day <= latestProgress.day ? Number(toPages(getLastKnownValue(history, day) ?? 0).toFixed(2)) : null,
+      forecast: forecast && latestProgress && day >= latestProgress.day
+        ? Number(toPages(Math.min(totalParts, latestProgress.value + ((day - latestProgress.day) * forecast.perDay))).toFixed(2))
+        : null,
     }));
-  }, [history, totalDays, totalParts]);
+  }, [forecast, history, latestProgress, totalDays, totalParts]);
 
-  const heatmapWeeks = useMemo(() => {
+  const studyMonths = useMemo(() => {
     const cells = Array.from({ length: totalDays + 1 }, (_, day) => {
+      const dateObj = getDateForDay(day);
       const hasEntry = history.some((h) => h.day === day);
-      return { day, hasEntry, label: formatDayLabel(day) };
+      return {
+        day,
+        hasEntry,
+        label: formatDayLabel(day),
+        fullDate: formatFullDate(day),
+        monthKey: `${dateObj.getFullYear()}-${dateObj.getMonth()}`,
+        monthLabel: dateObj.toLocaleDateString("he-IL", { month: "long", year: "numeric" }),
+      };
     });
 
-    const rows = [];
-    for (let i = 0; i < cells.length; i += 14) {
-      rows.push(cells.slice(i, i + 14));
+    const months = [];
+    for (const cell of cells) {
+      const lastMonth = months[months.length - 1];
+      if (!lastMonth || lastMonth.key !== cell.monthKey) {
+        months.push({ key: cell.monthKey, label: cell.monthLabel, cells: [cell] });
+      } else {
+        lastMonth.cells.push(cell);
+      }
     }
-    return rows;
+    return months;
   }, [history, totalDays]);
 
   const milestones = useMemo(() => {
@@ -256,70 +309,53 @@ export default function Tracker() {
   }, [totalParts]);
 
   return (
-    <div dir="rtl" style={{ background: "#f8fafc", minHeight: "100vh", padding: 24, fontFamily: "Arial, sans-serif" }}>
-      <div style={{ maxWidth: 1200, margin: "0 auto", display: "grid", gap: 24 }}>
-        <div style={{ background: "white", borderRadius: 16, padding: 20, boxShadow: "0 1px 4px rgba(0,0,0,0.08)" }}>
-          <h1 style={{ marginTop: 0 }}>מעקב סיום מסכת סנהדרין</h1>
+    <div dir="rtl" style={{ background: "#f8fafc", minHeight: "100vh", padding: isVeryNarrowScreen ? 12 : 24, fontFamily: "Arial, sans-serif" }}>
+      <div style={{ maxWidth: 1200, margin: "0 auto", display: "grid", gap: isVeryNarrowScreen ? 16 : 24 }}>
+        <div style={{ background: "white", borderRadius: 16, padding: isVeryNarrowScreen ? 16 : 20, boxShadow: "0 1px 4px rgba(0,0,0,0.08)" }}>
+          <h1 style={{ marginTop: 0 }}>מעקב התקדמות במסכת סנהדרין</h1>
           <p style={{ color: "#475569" }}>תחילת התכנית: 10/03/2026, מנקודת התחלה דף מ״ב עמוד ב חצי עליון. יעד סיום: 02/11/2026.</p>
           {lastCodeChange && (
             <p style={{ color: "#64748b", fontSize: 14 }}>
               עדכון קוד אחרון: {lastCodeChange}
             </p>
           )}
-          <div style={{ marginBottom: 14, padding: 12, borderRadius: 12, background: isEditMode ? "#ecfdf5" : "#eff6ff", color: isEditMode ? "#166534" : "#1d4ed8" }}>
-            {isEditMode
-              ? "מצב עריכה פעיל. הלינק הרגיל מתאים לשיתוף לקריאה בלבד."
-              : "מצב קריאה בלבד. כדי לערוך, היכנס עם לינק העריכה הפרטי שלך."}
-          </div>
-
           {error && <div style={{ marginBottom: 12, padding: 12, borderRadius: 12, background: "#fef2f2", color: "#b91c1c" }}>{error}</div>}
           {statusMessage && <div style={{ marginBottom: 12, padding: 12, borderRadius: 12, background: "#f0fdf4", color: "#166534" }}>{statusMessage}</div>}
           {isLoading && <div style={{ marginBottom: 12, color: "#475569" }}>טוען נתונים מהענן...</div>}
-
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12, alignItems: "end" }}>
-            <label style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
-              <div style={{ marginBottom: 6 }}>תאריך העדכון</div>
-              <input type="date" value={date} onChange={(e) => setDate(e.target.value)} disabled={!isEditMode || isSaving} style={{ width: "100%", boxSizing: "border-box", padding: 10, borderRadius: 10, border: "1px solid #cbd5e1", direction: "ltr", background: isEditMode ? "white" : "#f8fafc" }} />
-            </label>
-
-            <label style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
-              <div style={{ marginBottom: 6 }}>דף</div>
-              <select value={daf} onChange={(e) => setDaf(e.target.value)} disabled={!isEditMode || isSaving} style={{ width: "100%", boxSizing: "border-box", padding: 10, borderRadius: 10, border: "1px solid #cbd5e1", background: isEditMode ? "white" : "#f8fafc" }}>
-                {Array.from({ length: 72 }, (_, i) => 42 + i).map((d) => (
-                  <option key={d} value={String(d)}>דף {formatHebrewDaf(d)}</option>
-                ))}
-              </select>
-            </label>
-
-            <label style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
-              <div style={{ marginBottom: 6 }}>חלק בדף</div>
-              <select value={part} onChange={(e) => setPart(e.target.value)} disabled={!isEditMode || isSaving} style={{ width: "100%", boxSizing: "border-box", padding: 10, borderRadius: 10, border: "1px solid #cbd5e1", background: isEditMode ? "white" : "#f8fafc" }}>
-                {partLabels.map((p) => (
-                  <option key={p.key} value={p.key}>{p.label}</option>
-                ))}
-              </select>
-            </label>
-
-            {isEditMode && (
-              <button onClick={save} disabled={isSaving} style={{ width: "100%", boxSizing: "border-box", padding: 12, borderRadius: 10, border: 0, background: "#2563eb", color: "white", cursor: "pointer", minHeight: 42, opacity: isSaving ? 0.7 : 1 }}>
-                {isSaving ? "שומר..." : "שמור עדכון"}
-              </button>
-            )}
-          </div>
-
-          {isEditMode && showDangerZone && (
-            <div style={{ marginTop: 18, padding: 16, borderRadius: 12, border: "1px dashed #ef4444", background: "#fff7ed" }}>
-              <div style={{ marginBottom: 10, fontWeight: 700, color: "#9a3412" }}>אזור איפוס מוסתר</div>
-              <div style={{ marginBottom: 10, color: "#9a3412" }}>האיפוס לא מופיע בלינק הרגיל. כדי להגיע אליו צריך גם לינק עריכה וגם להוסיף לכתובת את {RESET_HASH}.</div>
-              <button onClick={reset} disabled={isSaving} style={{ padding: 12, borderRadius: 10, border: 0, background: "#dc2626", color: "white", cursor: "pointer", minHeight: 42, opacity: isSaving ? 0.7 : 1 }}>
-                {isSaving ? "מאפס..." : "איפוס מלא"}
-              </button>
-            </div>
-          )}
         </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 16 }}>
-          <div style={{ background: "white", borderRadius: 16, padding: 20, boxShadow: "0 1px 4px rgba(0,0,0,0.08)" }}>
+        <div style={{ background: "white", borderRadius: 16, padding: isVeryNarrowScreen ? 16 : 20, boxShadow: "0 1px 4px rgba(0,0,0,0.08)" }}>
+          <h2 style={{ marginTop: 0 }}>גרף התקדמות מול התכנית</h2>
+          <div style={{ overflowX: "hidden" }}>
+            <div style={{ height: isVeryNarrowScreen ? 260 : isNarrowScreen ? 320 : 420, minWidth: "auto" }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={chartData} margin={{ top: 20, right: 20, left: 20, bottom: 20 }}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis
+                    dataKey="xLabel"
+                    interval={isVeryNarrowScreen ? 34 : isNarrowScreen ? 24 : 20}
+                    tick={{ fontSize: isVeryNarrowScreen ? 11 : 12 }}
+                    label={isVeryNarrowScreen ? undefined : { value: "תאריך", position: "insideBottom", offset: -10 }}
+                  />
+                  <YAxis
+                    tick={{ fontSize: isVeryNarrowScreen ? 11 : 12 }}
+                    width={isVeryNarrowScreen ? 34 : 48}
+                    label={isVeryNarrowScreen ? undefined : { value: "דפים מצטברים", angle: -90, position: "insideLeft" }}
+                  />
+                  <Tooltip formatter={(value) => [typeof value === "number" ? `${value.toFixed(2)} דפים` : value, ""]} />
+                  {!isVeryNarrowScreen && <Legend />}
+                  <Line type="monotone" dataKey="planned" name="תכנון" stroke="#2563eb" strokeWidth={3} dot={false} />
+                  <Line type="monotone" dataKey="actual" name="בפועל" stroke="#16a34a" strokeWidth={3} dot={false} connectNulls />
+                  <Line type="monotone" dataKey="forecast" name="תחזית" stroke="#94a3b8" strokeWidth={1.5} dot={false} strokeDasharray="4 4" connectNulls />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+          <p style={{ color: "#475569", marginTop: 12, marginBottom: 0 }}>ציר X מציג תאריכים לאורך התכנית. ציר Y מציג דפים מצטברים מנקודת ההתחלה. הקו הכחול הוא התכנון, הירוק הוא ההתקדמות בפועל, והאפור הוא התחזית.</p>
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: isVeryNarrowScreen ? "1fr" : "repeat(auto-fit, minmax(220px, 1fr))", gap: 16 }}>
+          <div style={{ background: "white", borderRadius: 16, padding: isVeryNarrowScreen ? 16 : 20, boxShadow: "0 1px 4px rgba(0,0,0,0.08)" }}>
             <div style={{ color: "#64748b", marginBottom: 8 }}>אחוז התקדמות</div>
             <div style={{ height: 14, background: "#e2e8f0", borderRadius: 999 }}>
               <div style={{ width: `${Math.max(0, Math.min(100, percent))}%`, height: 14, borderRadius: 999, background: "#22c55e" }} />
@@ -327,24 +363,25 @@ export default function Tracker() {
             <div style={{ marginTop: 10, fontWeight: 700 }}>{percent.toFixed(1)}%</div>
           </div>
 
-          <div style={{ background: "white", borderRadius: 16, padding: 20, boxShadow: "0 1px 4px rgba(0,0,0,0.08)" }}>
+          <div style={{ background: "white", borderRadius: 16, padding: isVeryNarrowScreen ? 16 : 20, boxShadow: "0 1px 4px rgba(0,0,0,0.08)" }}>
             <div style={{ color: "#64748b", marginBottom: 8 }}>פער מול התכנית היום</div>
-            <div style={{ fontSize: 28, fontWeight: 700 }}>{gap.toFixed(1)} רבעים</div>
+            <div style={{ fontSize: 28, fontWeight: 700 }}>{formatPages(Math.abs(gap), 1)}</div>
             <div style={{ marginTop: 8, color: gap >= 0 ? "#15803d" : "#b45309" }}>{gap >= 0 ? "אתה לפני היעד" : "אתה מאחורי היעד"}</div>
           </div>
 
-          <div style={{ background: "white", borderRadius: 16, padding: 20, boxShadow: "0 1px 4px rgba(0,0,0,0.08)" }}>
+          <div style={{ background: "white", borderRadius: 16, padding: isVeryNarrowScreen ? 16 : 20, boxShadow: "0 1px 4px rgba(0,0,0,0.08)" }}>
             <div style={{ color: "#64748b", marginBottom: 8 }}>העדכון האחרון</div>
             <div style={{ fontSize: 22, fontWeight: 700 }}>
-              {latestProgress ? `${formatDayLabel(latestProgress.day)} · ${latestProgress.value} רבעים` : "עדיין אין נתונים"}
+              {latestProgress ? `${formatPages(latestProgress.value, 2)} · ${getProgressLabel(latestProgress.value)}` : "עדיין אין נתונים"}
             </div>
+            {latestProgress && <div style={{ marginTop: 8, color: "#64748b" }}>{formatFullDate(latestProgress.day)}</div>}
           </div>
 
-          <div style={{ background: "white", borderRadius: 16, padding: 20, boxShadow: "0 1px 4px rgba(0,0,0,0.08)" }}>
+          <div style={{ background: "white", borderRadius: 16, padding: isVeryNarrowScreen ? 16 : 20, boxShadow: "0 1px 4px rgba(0,0,0,0.08)" }}>
             <div style={{ color: "#64748b", marginBottom: 8 }}>תחזית לפי הקצב שלך</div>
             {forecast ? (
               <>
-                <div style={{ fontSize: 22, fontWeight: 700 }}>{forecast.perWeek.toFixed(2)} רבעים לשבוע</div>
+                <div style={{ fontSize: 22, fontWeight: 700 }}>{formatPages(forecast.perWeek, 2)} לשבוע</div>
                 <div style={{ marginTop: 8 }}>סיום משוער: {forecast.finishDate.toLocaleDateString("he-IL")}</div>
               </>
             ) : (
@@ -353,51 +390,100 @@ export default function Tracker() {
           </div>
         </div>
 
-        <div style={{ background: "white", borderRadius: 16, padding: 20, boxShadow: "0 1px 4px rgba(0,0,0,0.08)" }}>
-          <h2 style={{ marginTop: 0 }}>גרף התקדמות מול התכנית</h2>
-          <p style={{ color: "#475569" }}>ציר X מציג תאריכים לאורך התכנית. ציר Y מציג רבעי דף מצטברים מנקודת ההתחלה. הקו הכחול הוא התכנון, והקו הירוק הוא ההתקדמות בפועל.</p>
-          <div style={{ height: 420 }}>
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={chartData} margin={{ top: 20, right: 20, left: 20, bottom: 20 }}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="xLabel" interval={20} label={{ value: "תאריך", position: "insideBottom", offset: -10 }} />
-                <YAxis label={{ value: "רבעי דף מצטברים", angle: -90, position: "insideLeft" }} />
-                <Tooltip formatter={(value) => [`${value} רבעים`, ""]} />
-                <Legend />
-                <Line type="monotone" dataKey="planned" name="תכנון" stroke="#2563eb" strokeWidth={3} dot={false} />
-                <Line type="monotone" dataKey="actual" name="בפועל" stroke="#16a34a" strokeWidth={3} dot={false} connectNulls />
-              </LineChart>
-            </ResponsiveContainer>
+        {isEditMode && (
+          <div style={{ background: "white", borderRadius: 16, padding: isVeryNarrowScreen ? 16 : 20, boxShadow: "0 1px 4px rgba(0,0,0,0.08)" }}>
+            <div style={{ display: "grid", gridTemplateColumns: isVeryNarrowScreen ? "1fr" : "repeat(auto-fit, minmax(220px, 1fr))", gap: 12, alignItems: "end" }}>
+              <label style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
+                <div style={{ marginBottom: 6 }}>תאריך העדכון</div>
+                <input type="date" value={date} onChange={(e) => setDate(e.target.value)} disabled={isSaving} style={{ width: "100%", boxSizing: "border-box", padding: 10, borderRadius: 10, border: "1px solid #cbd5e1", direction: "ltr", background: "white" }} />
+              </label>
+
+              <label style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
+                <div style={{ marginBottom: 6 }}>דף</div>
+                <select value={daf} onChange={(e) => setDaf(e.target.value)} disabled={isSaving} style={{ width: "100%", boxSizing: "border-box", padding: 10, borderRadius: 10, border: "1px solid #cbd5e1", background: "white" }}>
+                  {Array.from({ length: 72 }, (_, i) => 42 + i).map((d) => (
+                    <option key={d} value={String(d)}>דף {formatHebrewDaf(d)}</option>
+                  ))}
+                </select>
+              </label>
+
+              <label style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
+                <div style={{ marginBottom: 6 }}>חלק בדף</div>
+                <select value={part} onChange={(e) => setPart(e.target.value)} disabled={isSaving} style={{ width: "100%", boxSizing: "border-box", padding: 10, borderRadius: 10, border: "1px solid #cbd5e1", background: "white" }}>
+                  {partLabels.map((p) => (
+                    <option key={p.key} value={p.key}>{p.label}</option>
+                  ))}
+                </select>
+              </label>
+
+              <button onClick={save} disabled={isSaving} style={{ width: "100%", boxSizing: "border-box", padding: 12, borderRadius: 10, border: 0, background: "#2563eb", color: "white", cursor: "pointer", minHeight: 42, opacity: isSaving ? 0.7 : 1 }}>
+                {isSaving ? "שומר..." : "שמור עדכון"}
+              </button>
+            </div>
+
+            {showDangerZone && (
+              <div style={{ marginTop: 18, padding: 16, borderRadius: 12, border: "1px dashed #ef4444", background: "#fff7ed" }}>
+                <div style={{ marginBottom: 10, fontWeight: 700, color: "#9a3412" }}>אזור איפוס מוסתר</div>
+                <div style={{ marginBottom: 10, color: "#9a3412" }}>האיפוס לא מופיע בלינק הרגיל. כדי להגיע אליו צריך גם לינק עריכה וגם להוסיף לכתובת את {RESET_HASH}.</div>
+                <button onClick={reset} disabled={isSaving} style={{ padding: 12, borderRadius: 10, border: 0, background: "#dc2626", color: "white", cursor: "pointer", minHeight: 42, opacity: isSaving ? 0.7 : 1 }}>
+                  {isSaving ? "מאפס..." : "איפוס מלא"}
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
+        <div style={{ background: "white", borderRadius: 16, padding: isVeryNarrowScreen ? 16 : 20, boxShadow: "0 1px 4px rgba(0,0,0,0.08)" }}>
+          <div style={{ padding: 12, borderRadius: 12, background: isEditMode ? "#ecfdf5" : "#eff6ff", color: isEditMode ? "#166534" : "#1d4ed8" }}>
+            {isEditMode
+              ? "מצב עריכה פעיל. הלינק הרגיל מתאים לשיתוף לקריאה בלבד."
+              : "מצב קריאה בלבד. כדי לערוך, היכנס עם לינק העריכה הפרטי שלך."}
           </div>
         </div>
 
-        <div style={{ background: "white", borderRadius: 16, padding: 20, boxShadow: "0 1px 4px rgba(0,0,0,0.08)" }}>
+        <div style={{ background: "white", borderRadius: 16, padding: isVeryNarrowScreen ? 16 : 20, boxShadow: "0 1px 4px rgba(0,0,0,0.08)", position: "relative" }}>
           <h2 style={{ marginTop: 0 }}>ימי לימוד</h2>
           <p style={{ color: "#475569" }}>כל ריבוע ירוק הוא יום שבו נשמר עדכון. אפור אומר שלא נשמר עדכון באותו יום.</p>
-          <div style={{ display: "grid", gap: 8 }}>
-            {heatmapWeeks.map((row, rowIndex) => (
-              <div key={rowIndex} style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                {row.map((cell) => (
-                  <div
-                    key={cell.day}
-                    title={cell.label}
-                    style={{
-                      width: 18,
-                      height: 18,
-                      borderRadius: 4,
-                      background: cell.hasEntry ? "#22c55e" : "#e2e8f0",
-                      border: "1px solid #cbd5e1",
-                    }}
-                  />
-                ))}
+          <div style={{ display: "grid", gap: 14 }}>
+            {studyMonths.map((month) => (
+              <div key={month.key} style={{ display: "grid", gridTemplateColumns: isVeryNarrowScreen ? "88px 1fr" : "140px 1fr", gap: 8, alignItems: "start" }}>
+                <div style={{ color: "#334155", fontWeight: 700, paddingTop: 2, fontSize: isVeryNarrowScreen ? 13 : 16 }}>{month.label}</div>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  {month.cells.map((cell) => (
+                    <button
+                      key={cell.day}
+                      type="button"
+                      onMouseEnter={() => setHoveredStudyDay(cell)}
+                      onMouseMove={() => setHoveredStudyDay(cell)}
+                      onMouseLeave={() => setHoveredStudyDay(null)}
+                      onFocus={() => setHoveredStudyDay(cell)}
+                      onBlur={() => setHoveredStudyDay(null)}
+                      style={{
+                        width: isVeryNarrowScreen ? 16 : 18,
+                        height: isVeryNarrowScreen ? 16 : 18,
+                        borderRadius: 4,
+                        background: cell.hasEntry ? "#22c55e" : "#e2e8f0",
+                        border: "1px solid #cbd5e1",
+                        padding: 0,
+                        cursor: "default",
+                      }}
+                      aria-label={`${cell.fullDate} - ${cell.hasEntry ? "יש עדכון" : "ללא עדכון"}`}
+                    />
+                  ))}
+                </div>
               </div>
             ))}
           </div>
+          {hoveredStudyDay && (
+            <div style={{ position: "absolute", top: 16, left: 16, padding: "8px 10px", borderRadius: 10, background: "#0f172a", color: "white", fontSize: 13, pointerEvents: "none", boxShadow: "0 10px 25px rgba(15,23,42,0.2)" }}>
+              {hoveredStudyDay.fullDate} · {hoveredStudyDay.hasEntry ? "נשמר עדכון" : "אין עדכון"}
+            </div>
+          )}
         </div>
 
-        <div style={{ background: "white", borderRadius: 16, padding: 20, boxShadow: "0 1px 4px rgba(0,0,0,0.08)" }}>
+        <div style={{ background: "white", borderRadius: 16, padding: isVeryNarrowScreen ? 16 : 20, boxShadow: "0 1px 4px rgba(0,0,0,0.08)" }}>
           <h2 style={{ marginTop: 0 }}>אבני דרך</h2>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12 }}>
+          <div style={{ display: "grid", gridTemplateColumns: isVeryNarrowScreen ? "1fr 1fr" : "repeat(auto-fit, minmax(180px, 1fr))", gap: 12 }}>
             {milestones.map((m) => (
               <div key={m.title} style={{ border: "1px solid #e2e8f0", borderRadius: 12, padding: 12 }}>
                 <div style={{ color: "#64748b" }}>{m.title}</div>
@@ -406,6 +492,14 @@ export default function Tracker() {
             ))}
           </div>
         </div>
+
+        {isNarrowScreen && (
+          <div style={{ background: "white", borderRadius: 16, padding: isVeryNarrowScreen ? 16 : 20, boxShadow: "0 1px 4px rgba(0,0,0,0.08)" }}>
+            <div style={{ padding: 12, borderRadius: 12, background: "#f8fafc", color: "#475569", border: "1px solid #e2e8f0" }}>
+              המסך מותאם גם לאורך. לרוחב יהיה מעט נוח יותר לגרף, אבל לא חובה.
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
