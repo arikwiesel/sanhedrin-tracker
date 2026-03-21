@@ -46,6 +46,18 @@ function getHeader(req, name) {
   return Array.isArray(value) ? value[0] : value || "";
 }
 
+function normalizeHeaders(headers) {
+  if (!headers) {
+    return {};
+  }
+
+  if (typeof headers[Symbol.iterator] === "function") {
+    return Object.fromEntries(headers);
+  }
+
+  return headers;
+}
+
 function getExpectedEditKey() {
   return process.env.EDIT_KEY || (isDevelopment ? devEditKey : "");
 }
@@ -127,7 +139,7 @@ export default defineEventHandler(async (event) => {
       ? { method: event.req.method, headers: event.req.headers, body: parsedBody }
       : {
           method: event.method,
-          headers: Object.fromEntries(event.headers || []),
+          headers: normalizeHeaders(event.headers),
           body: parsedBody,
         };
   const res = event.node?.res || event.res;
