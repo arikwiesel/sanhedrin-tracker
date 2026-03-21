@@ -1,5 +1,5 @@
 import { Redis } from "@upstash/redis";
-import { defineEventHandler, readBody, setHeader, setResponseStatus } from "h3";
+import { defineEventHandler, readBody } from "h3";
 
 const HISTORY_KEY = "sanhedrin:history";
 const isDevelopment = process.env.VERCEL !== "1";
@@ -80,7 +80,12 @@ function parseJsonBody(req) {
 
 function sendJson(res, statusCode, payload) {
   if (!res) {
-    return { statusCode, payload };
+    return new Response(JSON.stringify(payload), {
+      status: statusCode,
+      headers: {
+        "Content-Type": "application/json; charset=utf-8",
+      },
+    });
   }
 
   res.statusCode = statusCode;
@@ -144,12 +149,6 @@ export default defineEventHandler(async (event) => {
         };
   const res = event.node?.res || event.res;
   const result = await handleRequest(req, res);
-
-  if (!res && result) {
-    setResponseStatus(event, result.statusCode);
-    setHeader(event, "Content-Type", "application/json; charset=utf-8");
-    return result.payload;
-  }
 
   return result;
 });
