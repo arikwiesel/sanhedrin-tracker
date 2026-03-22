@@ -227,7 +227,9 @@ export default function Tracker() {
   };
 
   const latestProgress = history.length ? history[history.length - 1] : null;
-  const percent = latestProgress ? (latestProgress.value / totalParts) * 100 : 0;
+  const completedParts = latestProgress ? latestProgress.value : 0;
+  const remainingParts = Math.max(0, totalParts - completedParts);
+  const percent = (completedParts / totalParts) * 100;
   const expectedToday = (Math.min(todayDay, totalDays) / totalDays) * totalParts;
   const gap = latestProgress ? latestProgress.value - expectedToday : 0;
 
@@ -361,6 +363,12 @@ export default function Tracker() {
               <div style={{ width: `${Math.max(0, Math.min(100, percent))}%`, height: 14, borderRadius: 999, background: "#22c55e" }} />
             </div>
             <div style={{ marginTop: 10, fontWeight: 700 }}>{percent.toFixed(1)}%</div>
+            <div style={{ marginTop: 8, color: "#475569", lineHeight: 1.6 }}>
+              {`${formatPages(completedParts, 2)} מתוך ${formatPages(totalParts, 2)}`}
+            </div>
+            <div style={{ color: "#64748b", fontSize: 14 }}>
+              {`${formatPages(remainingParts, 2)} נותרו`}
+            </div>
           </div>
 
           <div style={{ background: "white", borderRadius: 16, padding: isVeryNarrowScreen ? 16 : 20, boxShadow: "0 1px 4px rgba(0,0,0,0.08)" }}>
