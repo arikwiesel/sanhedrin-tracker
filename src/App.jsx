@@ -20,6 +20,9 @@ function toIndex(daf, part) {
   return (daf - 42) * 4 + offset;
 }
 
+const trackingStartPart = toIndex(42, "b-top");
+const trackingEndPart = toIndex(113, "b-bottom");
+
 function daysBetween(a, b) {
   return Math.floor((b - a) / (1000 * 60 * 60 * 24));
 }
@@ -145,7 +148,7 @@ export default function Tracker() {
   }, []);
 
   const totalDays = daysBetween(startDate, targetDate);
-  const totalParts = toIndex(113, "b-bottom");
+  const totalParts = trackingEndPart - trackingStartPart;
   const todayDay = Math.max(0, daysBetween(startDate, new Date()));
 
   const save = async () => {
@@ -227,21 +230,26 @@ export default function Tracker() {
   };
 
   const latestProgress = history.length ? history[history.length - 1] : null;
-  const completedParts = latestProgress ? latestProgress.value : 0;
+  const completedParts = latestProgress ? Math.max(0, latestProgress.value - trackingStartPart) : 0;
   const remainingParts = Math.max(0, totalParts - completedParts);
   const percent = (completedParts / totalParts) * 100;
   const expectedToday = (Math.min(todayDay, totalDays) / totalDays) * totalParts;
-  const gap = latestProgress ? latestProgress.value - expectedToday : 0;
+  const gap = completedParts - expectedToday;
+  const elapsedDaysSoFar = Math.max(1, Math.min(todayDay, totalDays));
+  const remainingDays = Math.max(0, totalDays - Math.min(todayDay, totalDays));
+  const plannedPerWeek = (totalParts / totalDays) * 7;
+  const actualPerWeek = (completedParts / elapsedDaysSoFar) * 7;
+  const neededPerWeek = remainingDays > 0 ? (remainingParts / remainingDays) * 7 : 0;
 
   const forecast = useMemo(() => {
     if (history.length < 2) return null;
     const first = history[0];
     const last = history[history.length - 1];
-    const learned = last.value - first.value;
+    const learned = Math.max(0, last.value - trackingStartPart) - Math.max(0, first.value - trackingStartPart);
     const elapsed = last.day - first.day;
     if (elapsed <= 0 || learned <= 0) return null;
     const perDay = learned / elapsed;
-    const remaining = totalParts - last.value;
+    const remaining = totalParts - Math.max(0, last.value - trackingStartPart);
     const daysNeeded = Math.ceil(remaining / perDay);
     const finish = new Date(startDate);
     finish.setDate(startDate.getDate() + last.day + daysNeeded);
@@ -258,12 +266,14 @@ export default function Tracker() {
       day,
       xLabel: formatDayLabel(day),
       planned: Number(toPages((day / totalDays) * totalParts).toFixed(2)),
-      actual: latestProgress && day <= latestProgress.day ? Number(toPages(getLastKnownValue(history, day) ?? 0).toFixed(2)) : null,
+      actual: latestProgress && day <= latestProgress.day
+        ? Number(toPages(Math.max(0, (getLastKnownValue(history, day) ?? trackingStartPart) - trackingStartPart)).toFixed(2))
+        : null,
       forecast: forecast && latestProgress && day >= latestProgress.day
-        ? Number(toPages(Math.min(totalParts, latestProgress.value + ((day - latestProgress.day) * forecast.perDay))).toFixed(2))
+        ? Number(toPages(Math.min(totalParts, completedParts + ((day - latestProgress.day) * forecast.perDay))).toFixed(2))
         : null,
     }));
-  }, [forecast, history, latestProgress, totalDays, totalParts]);
+  }, [completedParts, forecast, history, latestProgress, totalDays, totalParts]);
 
   const studyMonths = useMemo(() => {
     const cells = Array.from({ length: totalDays + 1 }, (_, day) => {
@@ -301,8 +311,9 @@ export default function Tracker() {
     ];
 
     return points.map((m) => {
-      const dafNumber = 42 + Math.floor(m.value / 4);
-      const partIndex = Math.min(3, Math.max(0, Math.round(m.value) % 4));
+      const absoluteValue = trackingStartPart + m.value;
+      const dafNumber = 42 + Math.floor(absoluteValue / 4);
+      const partIndex = Math.min(3, Math.max(0, Math.round(absoluteValue) % 4));
       return {
         ...m,
         label: `דף ${formatHebrewDaf(dafNumber)} ${partLabels[partIndex].short}`,
@@ -380,21 +391,38 @@ export default function Tracker() {
           <div style={{ background: "white", borderRadius: 16, padding: isVeryNarrowScreen ? 16 : 20, boxShadow: "0 1px 4px rgba(0,0,0,0.08)" }}>
             <div style={{ color: "#64748b", marginBottom: 8 }}>העדכון האחרון</div>
             <div style={{ fontSize: 22, fontWeight: 700 }}>
-              {latestProgress ? `${formatPages(latestProgress.value, 2)} · ${getProgressLabel(latestProgress.value)}` : "עדיין אין נתונים"}
+              {latestProgress ? `${formatPages(completedParts, 2)} · ${getProgressLabel(latestProgress.value)}` : "עדיין אין נתונים"}
             </div>
             {latestProgress && <div style={{ marginTop: 8, color: "#64748b" }}>{formatFullDate(latestProgress.day)}</div>}
           </div>
 
           <div style={{ background: "white", borderRadius: 16, padding: isVeryNarrowScreen ? 16 : 20, boxShadow: "0 1px 4px rgba(0,0,0,0.08)" }}>
-            <div style={{ color: "#64748b", marginBottom: 8 }}>תחזית לפי הקצב שלך</div>
-            {forecast ? (
-              <>
-                <div style={{ fontSize: 22, fontWeight: 700 }}>{formatPages(forecast.perWeek, 2)} לשבוע</div>
-                <div style={{ marginTop: 8 }}>סיום משוער: {forecast.finishDate.toLocaleDateString("he-IL")}</div>
-              </>
-            ) : (
-              <div>צריך לפחות שני עדכונים כדי לחשב תחזית.</div>
-            )}
+            <div style={{ color: "#64748b", marginBottom: 8 }}>קצבים ותחזית</div>
+            <div style={{ display: "grid", gap: 10 }}>
+              <div>
+                <div style={{ fontSize: 14, color: "#64748b" }}>לפי התכנית המקורית</div>
+                <div style={{ fontSize: 20, fontWeight: 700 }}>{formatPages(plannedPerWeek, 2)} לשבוע</div>
+              </div>
+              <div>
+                <div style={{ fontSize: 14, color: "#64748b" }}>ממוצע בפועל עד עכשיו</div>
+                <div style={{ fontSize: 20, fontWeight: 700 }}>{formatPages(actualPerWeek, 2)} לשבוע</div>
+              </div>
+              <div>
+                <div style={{ fontSize: 14, color: "#64748b" }}>צריך מעכשיו כדי לעמוד ביעד</div>
+                <div style={{ fontSize: 20, fontWeight: 700 }}>{formatPages(neededPerWeek, 2)} לשבוע</div>
+              </div>
+              <div style={{ paddingTop: 4, borderTop: "1px solid #e2e8f0" }}>
+                {forecast ? (
+                  <>
+                    <div style={{ fontSize: 14, color: "#64748b" }}>תחזית לפי הקצב הנוכחי</div>
+                    <div style={{ fontSize: 18, fontWeight: 700 }}>{formatPages(forecast.perWeek, 2)} לשבוע</div>
+                    <div style={{ marginTop: 4 }}>סיום משוער: {forecast.finishDate.toLocaleDateString("he-IL")}</div>
+                  </>
+                ) : (
+                  <div>צריך לפחות שני עדכונים כדי לחשב תחזית.</div>
+                )}
+              </div>
+            </div>
           </div>
         </div>
 
